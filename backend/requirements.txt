@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+scapy
+pandas
+numpy
+joblib
+#pip install -r requirements.txt
