@@ -1,7 +1,8 @@
 import subprocess
 import os
 
-CAPTURE_FILE = "uploads/live_capture.pcap"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Get script directory
+CAPTURE_FILE = os.path.join(BASE_DIR, "../uploads/live_capture.pcap")
 CAPTURE_PROCESS = None
 
 def start_tcpdump():
@@ -9,23 +10,49 @@ def start_tcpdump():
     if CAPTURE_PROCESS:
         return {"message": "Capture already running"}
 
-    # Start capturing packets using tcpdump
-    CAPTURE_PROCESS = subprocess.Popen(
-        ["tcpdump", "-i", "eth0", "-w", CAPTURE_FILE, "-s", "0"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-    return {"message": "Packet capture started"}
+    # Ensure `tcpdump` is installed
+    if subprocess.run(["which", "tcpdump"], stdout=subprocess.PIPE).returncode != 0:
+        return {"error": "tcpdump is not installed or not found in PATH"}
+
+    # Ensure the uploads directory exists
+    os.makedirs(os.path.dirname(CAPTURE_FILE), exist_ok=True)
+
+    # Select network interface dynamically
+    try:
+        interfaces = subprocess.check_output(["ip", "link", "show"]).decode()
+        interface = "eth0" if "eth0" in interfaces else "any"
+    except Exception:
+        interface = "any"
+
+    try:
+        CAPTURE_PROCESS = subprocess.Popen(
+            ["sudo", "tcpdump", "-i", interface, "-w", CAPTURE_FILE, "-s", "0"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        return {"message": f"Packet capture started on {interface}"}
+    except Exception as e:
+        return {"error": f"Failed to start capture: {str(e)}"}
 
 def stop_tcpdump():
     global CAPTURE_PROCESS
     if not CAPTURE_PROCESS:
         return {"message": "No capture running"}
 
-    # Stop tcpdump
-    CAPTURE_PROCESS.terminate()
-    CAPTURE_PROCESS = None
+    try:
+        CAPTURE_PROCESS.terminate()
+        CAPTURE_PROCESS.wait()
+        CAPTURE_PROCESS = None
 
-    # Process the .pcap file to extract basic packet info
-    packet_count = subprocess.check_output(["tcpdump", "-r", CAPTURE_FILE, "-c", "100"]).decode()
-    
-    return {"message": "Capture stopped", "packets": packet_count}
+        # Validate capture file
+        if not os.path.exists(CAPTURE_FILE) or os.path.getsize(CAPTURE_FILE) == 0:
+            return {"message": "Capture stopped, but no packets recorded"}
+
+        # Extract packet count
+        try:
+            packet_count = subprocess.check_output(["tcpdump", "-r", CAPTURE_FILE, "-c", "100"]).decode()
+        except subprocess.CalledProcessError:
+            packet_count = "Could not read packets"
+
+        return {"message": "Capture stopped", "packets": packet_count}
+    except Exception as e:
+        return {"error": f"Failed to stop capture: {str(e)}"}

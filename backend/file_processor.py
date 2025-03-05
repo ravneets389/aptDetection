@@ -2,16 +2,28 @@ import scapy.all as scapy
 import pandas as pd
 import numpy as np
 
-# 📌 Extract Features from PCAP
 def process_pcap(pcap_path):
     packets = scapy.rdpcap(pcap_path)
     
-    # Feature Extraction Example
+    # Feature 1: Packet Count
     packet_count = len(packets)
-    unique_ips = set(pkt[scapy.IP].src for pkt in packets if scapy.IP in pkt)
-    ip_entropy = len(unique_ips) / packet_count if packet_count > 0 else 0
 
-    return np.array([packet_count, ip_entropy])
+    # Feature 2: Unique Source IPs
+    unique_ips = set(pkt[scapy.IP].src for pkt in packets if scapy.IP in pkt)
+    ip_entropy = len(unique_ips) / packet_count if packet_count > 0 else 0.0
+
+    # Feature 3: Average Packet Size
+    avg_pkt_size = np.mean([len(pkt) for pkt in packets]) if packet_count > 0 else 0.0
+
+    # Feature 4: Unique Protocols Used
+    unique_protocols = len(set(pkt[scapy.IP].proto for pkt in packets if scapy.IP in pkt))
+
+    # Feature 5: Variance in Packet Inter-Arrival Time (Fixed)
+    timestamps = [float(pkt.time) for pkt in packets]  # Ensure timestamps are floats
+    pkt_iat_var = float(np.var(np.diff(sorted(timestamps)))) if len(timestamps) > 1 else 0.0
+
+    return np.array([packet_count, ip_entropy, avg_pkt_size, unique_protocols, pkt_iat_var])
+
 
 # 📌 Extract Features from CSV (MTA-KDD 19 Format)
 def process_csv(csv_path):

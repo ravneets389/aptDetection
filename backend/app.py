@@ -2,8 +2,10 @@ from fastapi import FastAPI, File, UploadFile
 import os
 import uvicorn
 import joblib
-from capture_agent import start_tcpdump, stop_tcpdump
-from file_processor import process_pcap, process_csv
+import glob  
+from backend.capture_agent import start_tcpdump, stop_tcpdump  # ✅ Use absolute imports
+from backend.file_processor import process_pcap, process_csv  # ✅ Use absolute imports
+
 
 app = FastAPI()
 UPLOAD_FOLDER = "uploads/"
@@ -27,24 +29,33 @@ def start_capture():
 def stop_capture():
     return stop_tcpdump()
 
-# File Upload & Processing
-@app.post("/upload/")
-async def upload_file(file: UploadFile = File(...)):
-    file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-    
-    # Save file
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+def get_latest_file():
+    """Find the latest .pcap or .csv file in the uploads folder."""
+    files = sorted(glob.glob(os.path.join(UPLOAD_FOLDER, "*.pcap")) + glob.glob(os.path.join(UPLOAD_FOLDER, "*.csv")), key=os.path.getmtime, reverse=True)
+    return files[0] if files else None
+
+@app.get("/predict/")
+async def process_latest_file():
+    latest_file = get_latest_file()
+    if not latest_file:
+        return {"error": "No .pcap or .csv files found in uploads/"}
 
     # Process based on file type
-    if file.filename.endswith(".pcap"):
-        features = process_pcap(file_path)
-    elif file.filename.endswith(".csv"):
-        features = process_csv(file_path)
+    if latest_file.endswith(".pcap"):
+        features = process_pcap(latest_file)
+    elif latest_file.endswith(".csv"):
+        features = process_csv(latest_file)
     else:
-        return {"error": "Invalid file format. Upload .pcap or .csv"}
+        return {"error": "Unexpected file format"}
+
+    print("Extracted features:", features)
+    print("Feature vector length:", len(features))
 
     # Make prediction using ML model
     prediction = model.predict([features]) if model else "Model not loaded"
 
-    return {"prediction": int(prediction), "features": features.tolist()}
+    return {
+        "file": latest_file,
+        "prediction": "Malicious" if int(prediction) == 1 else "Genuine",
+        "features": features.tolist()
+    }
