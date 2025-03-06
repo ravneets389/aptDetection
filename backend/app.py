@@ -5,11 +5,20 @@ import joblib
 import glob  
 from backend.capture_agent import start_tcpdump, stop_tcpdump  # ✅ Use absolute imports
 from backend.file_processor import process_pcap, process_csv  # ✅ Use absolute imports
-
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 UPLOAD_FOLDER = "uploads/"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Allow frontend requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Adjust this to your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 # Load ML model
 model_path = "models/mta_kdd_model.pkl"

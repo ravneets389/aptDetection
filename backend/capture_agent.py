@@ -1,5 +1,6 @@
 import subprocess
 import os
+import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Get script directory
 CAPTURE_FILE = os.path.join(BASE_DIR, "../uploads/live_capture.pcap")
@@ -29,7 +30,7 @@ def start_tcpdump():
             ["sudo", "tcpdump", "-i", interface, "-w", CAPTURE_FILE, "-s", "0"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        return {"message": f"Packet capture started on {interface}"}
+        return {"message": f"Packet capture started on interface : {interface}"}
     except Exception as e:
         return {"error": f"Failed to start capture: {str(e)}"}
 
@@ -49,10 +50,12 @@ def stop_tcpdump():
 
         # Extract packet count
         try:
-            packet_count = subprocess.check_output(["tcpdump", "-r", CAPTURE_FILE, "-c", "100"]).decode()
+            packet_output = subprocess.check_output(["tcpdump", "-r", CAPTURE_FILE, "-c", "100"]).decode()
         except subprocess.CalledProcessError:
-            packet_count = "Could not read packets"
+            packet_output = "Could not read packets"
+        packet_lengths = re.findall(r'length (\d+)', packet_output)
+        total_length = sum(map(int, packet_lengths)) if packet_lengths else 0
 
-        return {"message": "Capture stopped", "packets": packet_count}
+        return {"message": f"Capture stopped with {len(packet_lengths)} packects"}
     except Exception as e:
         return {"error": f"Failed to stop capture: {str(e)}"}
