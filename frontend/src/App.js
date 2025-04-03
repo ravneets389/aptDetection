@@ -216,6 +216,35 @@ const App = () => {
   const [apiData, setApiData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploadMessage, setUploadMessage] = useState('');
+
+  const handleFileChange = (event) => {
+    setSelectedFile(event.target.files[0]);
+  };
+
+  const handleUpload = async () => {
+      if (!selectedFile) {
+          alert("Please select a file first.");
+          return;
+      }
+
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+
+      try {
+          const response = await fetch('http://localhost:8000/upload/', {
+              method: 'POST',
+              body: formData
+          });
+
+          const result = await response.json();
+          setUploadMessage(result.message);
+      } catch (error) {
+          console.error("Error uploading file:", error);
+          setUploadMessage("Failed to upload file.");
+      }
+  };
 
   // Mock data for demonstration
   useEffect(() => {
@@ -306,7 +335,34 @@ const App = () => {
     }
   };
 
-  return (
+  const handleFileUpload = async () => {
+    if (!selectedFile) {
+      alert("Please select a file to upload.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+
+    try {
+      const response = await fetch("http://localhost:8000/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to upload file");
+      }
+
+      const result = await response.json();
+      setUploadMessage(result.message || "File uploaded successfully!");
+    } catch (error) {
+      console.error("File upload error:", error);
+      setUploadMessage("Error uploading file.");
+    }
+  };
+  
+  return ( 
     <Box
       sx={{
         minHeight: "100vh",
@@ -440,6 +496,44 @@ const App = () => {
               <Square size={20} />
               Stop
             </Button>
+
+            <Button
+              variant="contained"
+              color="primary"
+              disabled={isLoading}
+              onClick={handleFileUpload}
+              sx={{
+                py: 1.5,
+                px: 3,
+                fontWeight: "medium",
+                boxShadow: 3,
+                backgroundColor: "#4caf50",
+                "&:hover": {
+                  backgroundColor: "#388e3c",
+                },
+                "&.Mui-disabled": {
+                  backgroundColor: "rgba(0, 0, 0, 0.12)",
+                },
+              }}
+            >
+              Upload
+            </Button>
+          </Box>
+
+          {/* File Selector */}
+          <Box sx={{ display: "flex", justifyContent: "center", mb: 4 }}>
+            <input
+              type="file"
+              onChange={handleFileChange}
+              style={{
+                display: "block",
+                margin: "0 auto",
+                padding: "8px",
+                borderRadius: "4px",
+                border: "1px solid #ccc",
+                backgroundColor: "#f9f9f9",
+              }}
+            />
           </Box>
 
           {/* Status Indicators */}

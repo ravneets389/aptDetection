@@ -4,13 +4,16 @@ import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Get script directory
 CAPTURE_FILE = os.path.join(BASE_DIR, "../uploads/live_capture.pcap")
+UPLOADED_FILE = os.path.join(BASE_DIR, "../uploads/uploaded_file.pcap")
 CAPTURE_PROCESS = None
 
 def start_tcpdump():
     global CAPTURE_PROCESS
     if CAPTURE_PROCESS:
         return {"message": "Capture already running"}
-
+#if uploaded file exists, then no need to do anything, call directly stop function
+    if os.path.exists(UPLOADED_FILE):
+        return {"message": "Uploaded file exists, no need to start capture, using uploaded file to predict"}
     # Ensure `tcpdump` is installed
     if subprocess.run(["which", "tcpdump"], stdout=subprocess.PIPE).returncode != 0:
         return {"error": "tcpdump is not installed or not found in PATH"}
@@ -40,7 +43,7 @@ def stop_tcpdump():
         return {"message": "No capture running"}
 
     try:
-        CAPTURE_PROCESS.terminate()
+        CAPTURE_PROCESS.kill()
         CAPTURE_PROCESS.wait()
         CAPTURE_PROCESS = None
 
@@ -50,7 +53,7 @@ def stop_tcpdump():
 
         # Extract packet count
         try:
-            packet_output = subprocess.check_output(["tcpdump", "-r", CAPTURE_FILE, "-c", "100"]).decode()
+            packet_output = subprocess.check_output(["sudo","tcpdump", "-r", CAPTURE_FILE, "-c", "100"]).decode()
         except subprocess.CalledProcessError:
             packet_output = "Could not read packets"
         packet_lengths = re.findall(r'length (\d+)', packet_output)
