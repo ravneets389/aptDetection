@@ -4,4 +4,5 @@ scapy
 pandas
 numpy
 joblib
+python-multipart
 #pip install -r requirements.txt

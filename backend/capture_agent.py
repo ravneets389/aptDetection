@@ -1,6 +1,7 @@
 import subprocess
 import os
 import re
+from flow_analyzer import extract_flows
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Get script directory
 CAPTURE_FILE = os.path.join(BASE_DIR, "../uploads/live_capture.pcap")
@@ -58,7 +59,15 @@ def stop_tcpdump():
             packet_output = "Could not read packets"
         packet_lengths = re.findall(r'length (\d+)', packet_output)
         total_length = sum(map(int, packet_lengths)) if packet_lengths else 0
+        
+        # Extract flows from the capture file
+        flows = extract_flows(CAPTURE_FILE)
+        flow_count = len(flows)
 
-        return {"message": f"Capture stopped with {len(packet_lengths)} packects"}
+        return {
+            "message": f"Capture stopped with {len(packet_lengths)} packets and {flow_count} flows",
+            "packet_count": len(packet_lengths),
+            "flow_count": flow_count
+        }
     except Exception as e:
         return {"error": f"Failed to stop capture: {str(e)}"}
