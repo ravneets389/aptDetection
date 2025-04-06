@@ -1,16 +1,19 @@
-import scapy.all as scapy
+import os
+import json
 import numpy as np
+import pandas as pd
+from datetime import datetime
+from scapy.layers.inet import IP, TCP, UDP
+from scapy.layers.l2 import Ether
+import scapy.all as scapy
 from collections import defaultdict
 import time
 import uuid
-import json
-import os
-from datetime import datetime
 
-# Global variables
-FLOWS = []  # Ensure FLOWS is always a list
+# Constants
 FLOWS_FILE = "flows.json"
 BACKUP_FILE = "flows_backup.json"
+FLOWS = []
 
 def load_flows():
     """Load flows from a JSON file with backup recovery"""
@@ -187,8 +190,21 @@ def extract_flows(pcap_file):
                 # Create flow key
                 flow_key = (src_ip, src_port, dst_ip, dst_port, protocol)
                 
+                # Get protocol names safely
+                protocol_names = []
+                for layer in packet.layers():
+                    try:
+                        # Try to get the name attribute, fallback to class name
+                        proto_name = getattr(layer, 'name', layer.__name__ if hasattr(layer, '__name__') else layer.__class__.__name__)
+                        if isinstance(proto_name, str):
+                            protocol_names.append(proto_name)
+                    except Exception as e:
+                        print(f"Error getting protocol name: {str(e)}")
+                        continue
+                
                 # Add packet to flow
                 if flow_key not in flows:
+                    # Initialize flow with basic features
                     flows[flow_key] = {
                         "id": str(uuid.uuid4()),
                         "source_ip": src_ip,
@@ -199,15 +215,25 @@ def extract_flows(pcap_file):
                         "packet_count": 0,
                         "byte_count": 0,
                         "start_time": float(packet.time),
-                        "end_time": float(packet.time),
-                        "packets": []
+                        # Store features from the first packet
+                        "frame_protocols": '_'.join(protocol_names) if protocol_names else 'unknown',
+                        "eth_src": packet[Ether].src if Ether in packet else "00:00:00:00:00:00",
+                        "eth_dst": packet[Ether].dst if Ether in packet else "00:00:00:00:00:00",
+                        "ip_flags": int(packet[IP].flags) if IP in packet else 0,
+                        "ip_ttl": packet[IP].ttl if IP in packet else 64,
+                        "ip_tos": packet[IP].tos if IP in packet else 0,
+                        "tcp_flags": int(packet[TCP].flags) if TCP in packet else 0,
+                        "tcp_window": packet[TCP].window if TCP in packet else 0,
+                        "tcp_scale": getattr(packet[TCP], 'window_scale', 1) if TCP in packet else 1,
+                        "tcp_options": str(packet[TCP].options) if TCP in packet else "",
+                        "tcp_checksum": packet[TCP].chksum if TCP in packet else 0
                     }
                 
                 # Update flow statistics
-                flows[flow_key]["packet_count"] += 1
-                flows[flow_key]["byte_count"] += len(packet)
-                flows[flow_key]["end_time"] = float(packet.time)
-                flows[flow_key]["packets"].append(packet)
+                flow = flows[flow_key]
+                flow["packet_count"] += 1
+                flow["byte_count"] += len(packet)
+                
             except Exception as packet_error:
                 print(f"Error processing packet: {str(packet_error)}")
                 continue
@@ -217,132 +243,101 @@ def extract_flows(pcap_file):
         # Convert flows dictionary to list
         new_flows = list(flows.values())
         
-        # Calculate additional features for each flow
-        for flow in new_flows:
-            if "packets" in flow and flow["packets"]:
-                # Calculate IP entropy
-                unique_ips = set()
-                for pkt in flow["packets"]:
-                    if scapy.IP in pkt:
-                        unique_ips.add(pkt[scapy.IP].src)
-                        unique_ips.add(pkt[scapy.IP].dst)
-                flow["ip_entropy"] = len(unique_ips) / flow["packet_count"] if flow["packet_count"] > 0 else 0.0
-                
-                # Calculate average packet size
-                flow["avg_packet_size"] = flow["byte_count"] / flow["packet_count"] if flow["packet_count"] > 0 else 0.0
-                
-                # Calculate unique protocols
-                flow["unique_protocols"] = len(set(pkt[scapy.IP].proto for pkt in flow["packets"] if scapy.IP in pkt))
-                
-                # Calculate packet IAT variance
-                timestamps = [float(pkt.time) for pkt in flow["packets"]]
-                flow["packet_iat_variance"] = float(np.var(np.diff(sorted(timestamps)))) if len(timestamps) > 1 else 0.0
-            else:
-                # Set default values if no packet data
-                flow["ip_entropy"] = 0.0
-                flow["avg_packet_size"] = 0.0
-                flow["unique_protocols"] = 1
-                flow["packet_iat_variance"] = 0.0
+        if new_flows:  # Only update FLOWS and save if we have new flows
+            # Add new flows to existing flows
+            FLOWS.extend(new_flows)
+            
+            # Save flows to file
+            save_flows()
         
-        # Add new flows to existing flows
-        FLOWS.extend(new_flows)
-        
-        # Save flows to file
-        save_flows()
-        
-        print(f"Successfully extracted and saved {len(new_flows)} flows")
+        # Return the new flows
         return new_flows
+        
     except Exception as e:
-        print(f"Error extracting flows from {pcap_file}: {str(e)}")
+        print(f"Error extracting flows: {str(e)}")
         import traceback
         traceback.print_exc()
         return []
 
 def extract_flow_features(flow):
-    """Extract features from a flow for ML prediction with improved error handling"""
+    """Extract features from a flow for ML prediction"""
     try:
         if not flow:
-            print("No flow provided")
+            print("DEBUG: No flow provided (flow is None or empty)")
             return None
             
-        # Check if we have packet data
-        if "packets" in flow and flow["packets"]:
-            # Calculate features from packet data
-            packet_count = len(flow["packets"])
-            ip_entropy = calculate_ip_entropy(flow["packets"])
-            avg_packet_size = sum(len(packet) for packet in flow["packets"]) / packet_count
-            unique_protocols = len(set(packet[23] for packet in flow["packets"]))
-            packet_iat_variance = calculate_packet_iat_variance(flow["packets"])
-        else:
-            # Use flow statistics if packet data is not available
-            packet_count = flow.get("packet_count", 0)
-            ip_entropy = flow.get("ip_entropy", 0.0)
-            avg_packet_size = flow.get("avg_packet_size", 0.0)
-            unique_protocols = flow.get("unique_protocols", 0)
-            packet_iat_variance = flow.get("packet_iat_variance", 0.0)
+        print(f"DEBUG: Flow ID: {flow.get('id')}")
         
-        # Create a list of features first
-        features_list = [
-            float(packet_count),
-            float(ip_entropy),
-            float(avg_packet_size),
-            float(unique_protocols),
-            float(packet_iat_variance)
-        ]
+        # Initialize features dictionary with exactly the 23 required features
+        features = {
+            # Frame features
+            'frame.time': flow.get('start_time', 0),
+            'frame.len': flow.get('byte_count', 0),
+            'frame.protocols': flow.get('frame_protocols', ''),
+            
+            # Ethernet features
+            'eth.src': flow.get('eth_src', '00:00:00:00:00:00'),
+            'eth.dst': flow.get('eth_dst', '00:00:00:00:00:00'),
+            
+            # IP features
+            'ip.dst': flow.get('dest_ip', '0.0.0.0'),
+            'ip.src': flow.get('source_ip', '0.0.0.0'),
+            'ip.flags': flow.get('ip_flags', 0),
+            'ip.ttl': flow.get('ip_ttl', 64),
+            'ip.proto': flow.get('protocol', 0),
+            'ip.checksum': flow.get('tcp_checksum', 0),
+            'ip.tos': flow.get('ip_tos', 0),
+            
+            # TCP features
+            'tcp.srcport': flow.get('source_port', 0),
+            'tcp.dstport': flow.get('dest_port', 0),
+            'tcp.flags': flow.get('tcp_flags', 0),
+            'tcp.window_size_value': flow.get('tcp_window', 0),
+            'tcp.window_size_scalefactor': flow.get('tcp_scale', 1),
+            'tcp.checksum': flow.get('tcp_checksum', 0),
+            'tcp.options': flow.get('tcp_options', ''),
+            'tcp.pdu.size': flow.get('byte_count', 0) / flow.get('packet_count', 1),
+            
+            # UDP features
+            'udp.srcport': flow.get('source_port', 0) if flow.get('protocol') == 17 else 0,
+            'udp.dstport': flow.get('dest_port', 0) if flow.get('protocol') == 17 else 0
+        }
         
-        # Convert to numpy array
-        features = np.array(features_list, dtype=np.float64)
+        print(f"DEBUG: All raw features collected: {features}")
         
-        # Check if the array is valid
-        if np.isnan(features).any() or np.isinf(features).any():
-            print("Invalid feature values detected (NaN or Inf)")
+        # Convert categorical features to numerical using one-hot encoding
+        categorical_features = ['frame.protocols', 'eth.src', 'eth.dst', 'ip.dst', 'ip.src', 
+                              'ip.flags', 'ip.proto', 'tcp.options']
+        
+        # Create a pandas DataFrame with one row
+        df = pd.DataFrame([features])
+        print("DEBUG: Created DataFrame from features")
+        
+        # Apply one-hot encoding to categorical features
+        df_encoded = pd.get_dummies(df, columns=categorical_features)
+        print(f"DEBUG: One-hot encoding applied. Number of features: {df_encoded.shape[1]}")
+        
+        # Convert to numpy array and ensure all values are float
+        features_array = df_encoded.values.astype(float)
+        print(f"DEBUG: Converted to numpy array. Shape: {features_array.shape}")
+        
+        # Verify we have valid data
+        if np.isnan(features_array).any():
+            print("DEBUG: NaN values detected in features")
+            return None
+        if np.isinf(features_array).any():
+            print("DEBUG: Infinite values detected in features")
             return None
             
-        return features
+        print("DEBUG: Feature extraction successful")
+        return features_array[0]  # Return the first (and only) row
+        
     except Exception as e:
-        print(f"Error extracting flow features: {str(e)}")
+        print(f"DEBUG: Error in extract_flow_features: {str(e)}")
+        print("DEBUG: Full traceback:")
         import traceback
         traceback.print_exc()
         return None
-
-def calculate_ip_entropy(packets):
-    """Calculate IP entropy from a list of packets with improved error handling"""
-    try:
-        if not packets:
-            return 0.0
-        
-        # Count unique IPs
-        unique_ips = set()
-        for packet in packets:
-            if scapy.IP in packet:
-                unique_ips.add(packet[scapy.IP].src)
-                unique_ips.add(packet[scapy.IP].dst)
-        
-        # Calculate entropy
-        packet_count = len(packets)
-        if packet_count == 0:
-            return 0.0
-        
-        return len(unique_ips) / packet_count
-    except Exception as e:
-        print(f"Error calculating IP entropy: {str(e)}")
-        return 0.0
-
-def calculate_packet_iat_variance(packets):
-    """Calculate packet inter-arrival time variance from a list of packets with improved error handling"""
-    try:
-        if not packets or len(packets) < 2:
-            return 0.0
-        
-        # Extract timestamps
-        timestamps = [float(packet.time) for packet in packets]
-        
-        # Calculate IAT variance
-        iat = np.diff(sorted(timestamps))
-        return float(np.var(iat)) if len(iat) > 0 else 0.0
-    except Exception as e:
-        print(f"Error calculating packet IAT variance: {str(e)}")
-        return 0.0
 
 # Load flows when module is imported
 load_flows() 

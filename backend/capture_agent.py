@@ -4,8 +4,8 @@ import re
 from flow_analyzer import extract_flows
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Get script directory
-CAPTURE_FILE = os.path.join(BASE_DIR, "../uploads/live_capture.pcap")
-UPLOADED_FILE = os.path.join(BASE_DIR, "../uploads/uploaded_file.pcap")
+CAPTURE_FILE = os.path.join(BASE_DIR, "../captures/live_capture.pcap")
+UPLOADED_FILE = os.path.join(BASE_DIR, "../captures/uploaded_file.pcap")
 CAPTURE_PROCESS = None
 
 def start_tcpdump():

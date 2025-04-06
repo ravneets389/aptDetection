@@ -458,6 +458,7 @@ const App = () => {
       return;
     }
 
+    setIsLoading(true);
     const formData = new FormData();
     formData.append("file", selectedFile);
 
@@ -474,6 +475,33 @@ const App = () => {
       const result = await response.json();
       setUploadMessage(result.message || "File uploaded successfully!");
       setShowUploadMessage(true);
+      
+      // Update flows with the data from the upload response
+      if (result.flows && Array.isArray(result.flows)) {
+        setFlows(result.flows);
+        
+        // If we have flows but no active flow, set the first one as active
+        if (!activeFlow && result.flows.length > 0) {
+          setActiveFlow(result.flows[0]?.id || null);
+        }
+        
+        // Clear any error messages
+        setFlowError(null);
+        setFlowErrorList([]);
+        
+        // Update API data with statistics if available
+        if (result.statistics) {
+          setApiData(prevData => ({
+            ...prevData,
+            ...result.statistics,
+            filename: result.filename,
+            file_size: result.file_size
+          }));
+        }
+      } else {
+        // If no flows in the response, fetch them separately
+        await analyzeFlows();
+      }
 
       // Auto-hide the message after 5 seconds
       setTimeout(() => {
@@ -483,6 +511,8 @@ const App = () => {
       console.error("File upload error:", error);
       setUploadMessage("Error uploading file.");
       setShowUploadMessage(true);
+    } finally {
+      setIsLoading(false);
     }
   };
 

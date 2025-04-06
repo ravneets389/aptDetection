@@ -23,30 +23,30 @@ pcap_writer = None
 capture_file = None
 capture_start_time = None
 
-def capture_packets():
-    """Capture packets and write them to the PCAP file"""
-    global is_capturing, pcap_writer
+# Load the trained model and feature names
+try:
+    model_path = os.path.join(os.path.dirname(__file__), "../models/network_traffic_model.pkl")
+    feature_names_path = os.path.join(os.path.dirname(__file__), "../models/feature_names.txt")
     
-    try:
-        print(f"Starting packet capture to {capture_file}")
+    if os.path.exists(model_path):
+        model = joblib.load(model_path)
+        print(f"Loaded model from {model_path}")
         
-        # Start capturing packets
-        scapy.sniff(
-            prn=lambda x: pcap_writer.write(x) if is_capturing else None,
-            store=False,
-            stop_filter=lambda x: not is_capturing,
-            timeout=None  # Run indefinitely until stopped
-        )
-    except Exception as e:
-        print(f"Error in packet capture: {str(e)}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        print("Packet capture stopped")
-        if pcap_writer:
-            pcap_writer.close()
-            print(f"Capture file closed: {capture_file}")
-            print(f"Capture file size: {os.path.getsize(capture_file)} bytes")
+        # Load feature names
+        if os.path.exists(feature_names_path):
+            with open(feature_names_path, 'r') as f:
+                feature_names = f.read().splitlines()
+            print(f"Loaded {len(feature_names)} feature names")
+        else:
+            print(f"Warning: Feature names file not found at {feature_names_path}")
+            feature_names = None
+    else:
+        print(f"Warning: Model file not found at {model_path}")
+        model = None
+except Exception as e:
+    print(f"Error loading model: {str(e)}")
+    model = None
+    feature_names = None
 
 app = FastAPI()
 UPLOAD_FOLDER = "../uploads/"
@@ -60,15 +60,6 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all HTTP methods
     allow_headers=["*"],  # Allow all headers
 )
-
-# Load ML model
-model_path = os.path.join(os.path.dirname(__file__), "..", "models", "mta_kdd_model.pkl")
-try:
-    model = joblib.load(model_path)
-    print(f"Model loaded successfully from {model_path}")
-except Exception as e:
-    print(f"Error loading model: {str(e)}")
-    model = None
 
 @app.get("/")
 async def root():
@@ -91,12 +82,12 @@ async def start_capture():
         )
     
     try:
-        # Create uploads directory if it doesn't exist
-        os.makedirs("uploads", exist_ok=True)
+        # Create captures directory if it doesn't exist
+        os.makedirs("../captures", exist_ok=True)
         
         # Generate a unique filename for this capture
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        capture_file = f"uploads/live_capture_{timestamp}.pcap"
+        capture_file = f"../captures/live_capture_{timestamp}.pcap"
         
         # Open the capture file in PCAP format (not PCAP-NG)
         pcap_writer = scapy.PcapWriter(capture_file, append=False, sync=True)
@@ -249,32 +240,108 @@ async def stop_capture():
         )
 
 def get_latest_file():
-    """Find the latest .pcap or .csv file in the uploads folder."""
-    files = sorted(glob.glob(os.path.join(UPLOAD_FOLDER, "*.pcap")) + glob.glob(os.path.join(UPLOAD_FOLDER, "*.csv")), key=os.path.getmtime, reverse=True)
+    """Find the latest .pcap or .csv file in the captures folder."""
+    files = sorted(glob.glob(os.path.join("../captures", "*.pcap")) + glob.glob(os.path.join("../captures", "*.csv")), key=os.path.getmtime, reverse=True)
     return files[0] if files else None
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """Upload a PCAP file"""
     try:
+        # Create captures directory if it doesn't exist
+        os.makedirs("../captures", exist_ok=True)
+        
         # Generate a unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"uploads/{timestamp}_{file.filename}"
+        filename = f"../captures/uploaded_{timestamp}_{file.filename}"
         
         # Save the file
         with open(filename, "wb") as f:
             content = await file.read()
             f.write(content)
-        
+            
+        # Check file size
+        file_size = os.path.getsize(filename)
+        if file_size == 0:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "message": "The uploaded file is empty"
+                }
+            )
+            
         # Extract flows from the file
         flows = extract_flows(filename)
         
+        if not flows:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "message": "No flows could be extracted from the file. This might be due to no network traffic in the file or the file format being incompatible."
+                }
+            )
+            
+        # Calculate statistics
+        total_packets = sum(flow.get("packet_count", 0) for flow in flows)
+        total_bytes = sum(flow.get("byte_count", 0) for flow in flows)
+        unique_ips = set()
+        unique_protocols = set()
+        
+        for flow in flows:
+            unique_ips.add(flow.get("source_ip"))
+            unique_ips.add(flow.get("dest_ip"))
+            unique_protocols.add(flow.get("protocol"))
+            
+            # Extract features for prediction if model is available
+            if model:
+                features = extract_flow_features(flow)
+                if features is not None:
+                    try:
+                        # Make prediction
+                        prediction = model.predict([features])[0]
+                        prediction_proba = model.predict_proba([features])[0]
+                        
+                        # Add prediction to flow
+                        flow["prediction"] = int(prediction)
+                        flow["prediction_probability"] = float(max(prediction_proba))
+                    except Exception as pred_error:
+                        print(f"Error making prediction: {str(pred_error)}")
+                        flow["prediction"] = None
+                        flow["prediction_probability"] = None
+        
+        # Remove packet data to reduce payload size
+        for flow in flows:
+            if "packets" in flow:
+                del flow["packets"]
+        
+        # Calculate statistics
+        stats = {
+            "total_flows": len(flows),
+            "total_packets": total_packets,
+            "total_bytes": total_bytes,
+            "unique_ips": len(unique_ips),
+            "unique_protocols": len(unique_protocols),
+            "avg_packets_per_flow": total_packets / len(flows) if flows else 0,
+            "avg_bytes_per_flow": total_bytes / len(flows) if flows else 0,
+            "malicious_flows": sum(1 for flow in flows if flow.get("prediction") == 1),
+            "benign_flows": sum(1 for flow in flows if flow.get("prediction") == 0),
+            "unknown_flows": sum(1 for flow in flows if flow.get("prediction") is None)
+        }
+        
         return {
             "status": "success",
-            "message": f"File uploaded and {len(flows)} flows extracted",
+            "message": f"File uploaded and analyzed successfully",
+            "filename": filename,
+            "file_size": file_size,
+            "statistics": stats,
             "flows": flows
         }
     except Exception as e:
+        print(f"Error uploading file: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(
             status_code=500,
             content={
@@ -494,11 +561,12 @@ async def predict_flow(flow_id: str):
             # Get feature importance
             feature_importance = model.feature_importances_
             feature_names = [
-                "packet_count",
-                "ip_entropy",
-                "avg_pkt_size",
-                "unique_protocols",
-                "pkt_iat_var",
+                'frame.time', 'frame.len', 'frame.protocols',
+                'eth.src', 'eth.dst',
+                'ip.dst', 'ip.src', 'ip.flags', 'ip.ttl', 'ip.proto', 'ip.checksum', 'ip.tos',
+                'tcp.srcport', 'tcp.dstport', 'tcp.flags', 'tcp.window_size_value',
+                'tcp.window_size_scalefactor', 'tcp.checksum', 'tcp.options', 'tcp.pdu.size',
+                'udp.srcport', 'udp.dstport'
             ]
             feature_importance_dict = dict(zip(feature_names, feature_importance.tolist()))
             
