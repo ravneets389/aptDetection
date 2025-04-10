@@ -3,8 +3,8 @@ frame.len
 frame.protocols
 eth.src
 eth.dst
-ip.dst
 ip.src
+ip.dst
 ip.flags
 ip.ttl
 ip.proto

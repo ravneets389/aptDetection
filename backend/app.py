@@ -3,7 +3,7 @@ import os
 import uvicorn
 import joblib
 import glob  
-from capture_agent import start_tcpdump, stop_tcpdump  # ✅ Use absolute imports
+from capture_agent import start_tcpdump, stop_tcpdump, CAPTURE_FILE  # ✅ Use absolute imports
 from file_processor import process_pcap, process_csv  # ✅ Use absolute imports
 from flow_analyzer import extract_flows, get_flows, get_flow_by_id, extract_flow_features, save_flows, load_flows  # Import flow analyzer
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +19,6 @@ from datetime import datetime
 
 # Global variables for packet capture
 is_capturing = False
-pcap_writer = None
 capture_file = None
 capture_start_time = None
 
@@ -49,8 +48,8 @@ except Exception as e:
     feature_names = None
 
 app = FastAPI()
-UPLOAD_FOLDER = "../uploads/"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+CAPTURES_FOLDER = "../uploads/"
+os.makedirs(CAPTURES_FOLDER, exist_ok=True)
 
 # Allow frontend requests
 app.add_middleware(
@@ -70,7 +69,7 @@ async def root():
 @app.post("/start_capture")
 async def start_capture():
     """Start capturing packets"""
-    global is_capturing, pcap_writer, capture_file, capture_start_time
+    global is_capturing, capture_file, capture_start_time
     
     if is_capturing:
         return JSONResponse(
@@ -82,68 +81,28 @@ async def start_capture():
         )
     
     try:
-        # Create captures directory if it doesn't exist
-        os.makedirs("../captures", exist_ok=True)
+        # Start the capture using the existing function
+        result = start_tcpdump()
         
-        # Generate a unique filename for this capture
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        capture_file = f"../captures/live_capture_{timestamp}.pcap"
-        
-        # Open the capture file in PCAP format (not PCAP-NG)
-        pcap_writer = scapy.PcapWriter(capture_file, append=False, sync=True)
-        
-        # Verify the file was created and is writable
-        if not os.path.exists(capture_file):
+        if "error" in result:
             return JSONResponse(
                 status_code=500,
                 content={
                     "status": "error",
-                    "message": "Failed to create capture file"
+                    "message": result["error"]
                 }
             )
             
-        # Start capturing
+        # Update global variables
         is_capturing = True
         capture_start_time = time.time()
-        
-        # Start the capture thread
-        capture_thread = threading.Thread(target=capture_packets)
-        capture_thread.daemon = True
-        capture_thread.start()
-        
-        # Wait a moment to ensure the capture has started
-        time.sleep(0.5)
-        
-        # Verify the file is being written to
-        if os.path.getsize(capture_file) == 0:
-            # If the file is still empty after a moment, there might be an issue
-            # with the capture process
-            is_capturing = False
-            if pcap_writer:
-                pcap_writer.close()
-                pcap_writer = None
-                
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "error",
-                    "message": "Capture started but no packets are being captured. This might be due to network interface issues or permissions."
-                }
-            )
+        capture_file = CAPTURE_FILE
         
         return {
             "status": "success",
-            "message": "Capture started",
+            "message": result["message"],
             "capture_file": capture_file
         }
-    except PermissionError:
-        return JSONResponse(
-            status_code=403,
-            content={
-                "status": "error",
-                "message": "Permission denied. Please run the server with sudo privileges to capture packets."
-            }
-        )
     except Exception as e:
         print(f"Error starting capture: {str(e)}")
         import traceback
@@ -160,7 +119,7 @@ async def start_capture():
 @app.post("/stop_capture")
 async def stop_capture():
     """Stop capturing packets"""
-    global is_capturing, pcap_writer, capture_file, capture_start_time
+    global is_capturing, capture_file, capture_start_time
     
     if not is_capturing:
         return JSONResponse(
@@ -172,43 +131,20 @@ async def stop_capture():
         )
     
     try:
-        print("Stopping capture...")
-        is_capturing = False
+        # Stop the capture using the existing function
+        result = stop_tcpdump()
         
-        # Close the pcap writer
-        if pcap_writer:
-            pcap_writer.close()
-            pcap_writer = None
-            print(f"Capture file closed: {capture_file}")
-        
-        # Wait a moment for the file to be properly closed
-        time.sleep(1)
-        
-        # Check if the capture file exists and has content
-        if not os.path.exists(capture_file):
+        if "error" in result:
             return JSONResponse(
                 status_code=500,
                 content={
                     "status": "error",
-                    "message": "Capture file not found"
+                    "message": result["error"]
                 }
             )
             
-        file_size = os.path.getsize(capture_file)
-        print(f"Capture file size: {file_size} bytes")
-        
-        if file_size == 0:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "status": "error",
-                    "message": "The capture file is empty. No packets were captured."
-                }
-            )
-        
-        # Analyze the captured packets
-        capture_duration = time.time() - capture_start_time
-        print(f"Capture duration: {capture_duration:.2f} seconds")
+        # Update global variables
+        is_capturing = False
         
         # Extract flows from the capture file
         flows = extract_flows(capture_file)
@@ -218,13 +154,13 @@ async def stop_capture():
                 status_code=404,
                 content={
                     "status": "error",
-                    "message": "No flows could be extracted from the capture file. This might be due to no network traffic being captured or the file format being incompatible."
+                    "message": "No flows could be extracted from the capture file"
                 }
             )
             
         return {
             "status": "success",
-            "message": f"Capture stopped after {capture_duration:.2f} seconds",
+            "message": result["message"],
             "flows": flows
         }
     except Exception as e:
@@ -621,6 +557,61 @@ async def reset_flows():
                 "message": f"Error resetting flows: {str(e)}"
             }
         )
+
+def capture_packets():
+    """Capture packets and save them to a PCAP file"""
+    global is_capturing, capture_file, capture_start_time
+    
+    try:
+        # Create captures directory if it doesn't exist
+        os.makedirs("../captures", exist_ok=True)
+        
+        # Generate a unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        capture_file = f"../captures/capture_{timestamp}.pcap"
+        
+        # Start capturing packets
+        result = start_tcpdump()
+        
+        if "error" in result:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": result["error"]
+                }
+            )
+            
+        # Update global variables
+        is_capturing = True
+        capture_start_time = time.time()
+        
+        print(f"Starting capture on interface: {interface}")
+        print(f"Capture file: {capture_file}")
+        
+        # Extract flows from the capture file
+        flows = extract_flows(capture_file)
+        
+        if not flows:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "message": "No flows could be extracted from the capture file"
+                }
+            )
+            
+        return {
+            "status": "success",
+            "message": result["message"],
+            "capture_file": capture_file,
+            "flows": flows
+        }
+    except Exception as e:
+        print(f"Error in capture_packets: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        is_capturing = False
 
 # if __name__ == "__main__":
 #     uvicorn.run(app, host="0.0.0.0", port=8000)
