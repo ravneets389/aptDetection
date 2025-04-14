@@ -4,7 +4,7 @@ import re
 from flow_analyzer import extract_flows
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Get script directory
-CAPTURES_DIR = os.path.join(BASE_DIR, "..", "captures")
+CAPTURES_DIR = os.path.join(BASE_DIR,"../captures")
 CAPTURE_FILE = os.path.join(CAPTURES_DIR, "live_capture.pcap")
 UPLOADED_FILE = os.path.join(CAPTURES_DIR, "uploaded_file.pcap")
 CAPTURE_PROCESS = None
@@ -43,8 +43,8 @@ def stop_tcpdump():
         return {"message": "No capture running"}
 
     try:
-        CAPTURE_PROCESS.terminate()  # Use terminate() instead of kill() for cleaner shutdown
-        CAPTURE_PROCESS.wait(timeout=5)  # Wait up to 5 seconds for the process to terminate
+        CAPTURE_PROCESS.kill()  # Use terminate() instead of kill() for cleaner shutdown
+        CAPTURE_PROCESS.wait()  # Wait up to 5 seconds for the process to terminate
         CAPTURE_PROCESS = None
 
         # Validate capture file

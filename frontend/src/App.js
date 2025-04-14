@@ -204,6 +204,7 @@ const App = () => {
     try {
       console.log("Analyzing flows...");
       setFlowError(null); // Clear any previous errors
+      setIsPredicting(true); // Show prediction status for all flows
 
       const response = await fetch("http://localhost:8000/analyze_flows", {
         method: "GET",
@@ -242,6 +243,38 @@ const App = () => {
         if (!activeFlow) {
           setActiveFlow(flows[0]?.id || null);
         }
+
+        // Predict all flows
+        const predictedFlows = await Promise.all(
+          flows.map(async (flow) => {
+            try {
+              const predResponse = await fetch(
+                `http://localhost:8000/predict_flow/${flow.id}`
+              );
+              const predData = await predResponse.json();
+
+              if (!predResponse.ok) {
+                console.error(`Error predicting flow ${flow.id}:`, predData);
+                return flow;
+              }
+
+              return {
+                ...flow,
+                prediction: predData.prediction?.is_malicious
+                  ? "Malicious"
+                  : "Genuine",
+                features: predData.prediction?.features || [],
+                featureImportance: predData.prediction?.feature_importance || {},
+              };
+            } catch (error) {
+              console.error(`Error predicting flow ${flow.id}:`, error);
+              return flow;
+            }
+          })
+        );
+
+        // Update flows with predictions
+        setFlows(predictedFlows);
       }
     } catch (error) {
       console.error("Flow analysis error:", error);
@@ -254,6 +287,8 @@ const App = () => {
       );
       setFlowErrorList([]);
       setShowUploadMessage(true);
+    } finally {
+      setIsPredicting(false); // Reset prediction status
     }
   };
 
@@ -347,7 +382,7 @@ const App = () => {
     }
   };
 
-  // Improved function to predict a specific flow
+  // Function to predict a specific flow
   const predictFlow = async (flowId) => {
     if (!flowId) {
       setFlowError("No flow selected. Please select a flow to analyze.");
@@ -358,50 +393,8 @@ const App = () => {
     setFlowError(null);
 
     try {
-      console.log(`Predicting flow ${flowId}...`);
-      const response = await fetch(
-        `http://localhost:8000/predict_flow/${flowId}`
-      );
-      const data = await response.json();
-
-      if (!response.ok) {
-        console.error("Flow prediction error:", data);
-        setFlowError(data.message || "Failed to predict flow");
-        return;
-      }
-
-      // Update the flow in the flows array
-      setFlows((prevFlows) =>
-        prevFlows.map((flow) =>
-          flow.id === flowId
-            ? {
-                ...flow,
-                prediction: data.prediction?.is_malicious
-                  ? "Malicious"
-                  : "Genuine",
-                features: data.prediction?.features || [],
-                featureImportance: data.prediction?.feature_importance || {},
-              }
-            : flow
-        )
-      );
-
-      // Update API data
-      setApiData((prevData) => ({
-        ...prevData,
-        prediction: data.prediction?.is_malicious ? "Malicious" : "Genuine",
-        features: data.prediction?.features || [],
-        featureImportance: data.prediction?.feature_importance || {},
-        error: null,
-      }));
-
-      // Show success message
-      setUploadMessage(
-        `Flow analyzed: ${
-          data.prediction?.is_malicious ? "Malicious" : "Genuine"
-        }`
-      );
-      setShowUploadMessage(true);
+      // Instead of predicting just one flow, we'll analyze all flows
+      await analyzeFlows();
     } catch (error) {
       console.error("Error predicting flow:", error);
       setFlowError("Failed to predict flow. Please try again.");
@@ -414,13 +407,6 @@ const App = () => {
   const handleFlowSelect = (flowId) => {
     setActiveFlow(flowId);
     setFlowError(null);
-
-    // Check if the flow has already been predicted
-    const selectedFlow = flows.find((f) => f.id === flowId);
-    if (selectedFlow && !selectedFlow.prediction) {
-      // Auto-predict the flow when selected
-      predictFlow(flowId);
-    }
   };
 
   // Clean up interval on component unmount
